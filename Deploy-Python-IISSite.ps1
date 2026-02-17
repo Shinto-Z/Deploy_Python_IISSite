@@ -522,7 +522,7 @@ function Deploy-IISSite {
 
         # Install packages into venv
         Write-Host "Installing required packages into venv..."
-        & $pipExe install @($packages)
+        & $pipExe --disable-pip-version-check install @($packages)
         $exitCode = $LASTEXITCODE
         
         if ($exitCode -ne 0) {
@@ -544,8 +544,6 @@ function Deploy-IISSite {
         else {
             Write-Error-Custom "Failed to import packages in venv: $($failed -join ', ')"
         }
-        
-        return
     }
     #OFFLINE
     else{
