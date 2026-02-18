@@ -13,6 +13,8 @@ param(
     [switch]$NoConfirm = $true
 )
 
+$ProgressPreference = 'SilentlyContinue'
+
 if (-not $PSBoundParameters.ContainsKey('KeepLocation')) { $KeepLocation = $true }
 if (-not $PSBoundParameters.ContainsKey('KeepAppPool')) { $KeepAppPool = $true }
 
@@ -353,7 +355,7 @@ function Copy-PythonPackage {
 
     $copied = $false
 
-    # Detect actual folder name (case-insensitive)
+    # Detect folder package
     $pkgFolder = Get-ChildItem $SourceSitePackages -Directory |
                  Where-Object { $_.Name -ieq $PackageName } |
                  Select-Object -First 1
@@ -364,7 +366,7 @@ function Copy-PythonPackage {
         $copied = $true
     } else { Write-Host "No folder package found for $PackageName" }
 
-    # Single-file module
+    # Detect single-file .py module
     $pkgFile = Get-ChildItem $SourceSitePackages -File |
                Where-Object { $_.Name -ieq "$PackageName.py" } |
                Select-Object -First 1
@@ -375,8 +377,19 @@ function Copy-PythonPackage {
         $copied = $true
     } else { Write-Host "No file module found for $PackageName.py" }
 
+    # NEW: Detect compiled extension module (.pyd)
+    $pydFile = Get-ChildItem $SourceSitePackages -File -Filter "$PackageName*.pyd" |
+               Select-Object -First 1
+
+    if ($pydFile) {
+        Write-Host "Found compiled module: $($pydFile.FullName)"
+        Copy-Item -Path $pydFile.FullName -Destination (Join-Path $TargetSitePackages $pydFile.Name) -Force
+        $copied = $true
+    } else { Write-Host "No compiled module (.pyd) found for $PackageName" }
+
     # dist-info metadata
-    $distInfo = Get-ChildItem $SourceSitePackages -Directory | Where-Object { $_.Name -match "^$PackageName-[\d\.]+\.dist-info$" }
+    $distInfo = Get-ChildItem $SourceSitePackages -Directory |
+                Where-Object { $_.Name -match "^$PackageName-[\d\.]+\.dist-info$" }
 
     if ($distInfo) {
         foreach ($info in $distInfo) {
@@ -418,7 +431,37 @@ function Get-SystemPython {
 
 function Deploy-IISSite {
     Write-Host "`n=== IIS Python Site Deployment ===" -ForegroundColor Cyan
-    
+
+    #Get and validate external list of python packages. If not successful, fallbac to default list.
+    $defaultpackages = @("flask", "wfastcgi","click", "itsdangerous", "jinja2", "markupsafe", "werkzeug", "blinker")
+
+    $packageFile = ".\python_packages.json"
+    $packages = $null
+
+    # 1. File exists
+    if (Test-Path $packageFile) {
+        try {
+            $json = Get-Content $packageFile -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+
+            if ($json -and $json.packages -and $json.packages.Count -gt 0) {
+                $packages = $json.packages
+                Write-Host "Loaded $($packages.Count) packages from JSON file."
+            }
+            else {
+                Write-Host "JSON file contains no packages. Using default list."
+                $packages = $defaultPackages
+            }
+        }
+        catch {
+            Write-Host "Error reading or parsing JSON. Using default list."
+            $packages = $defaultPackages
+        }
+    }
+    else {
+        Write-Host "Package JSON file not found. Using default list."
+        $packages = $defaultPackages
+    }
+
     # Verify IIS is installed
     if (-not (Get-Service W3SVC -ErrorAction SilentlyContinue)) {
         Write-Error-Custom "IIS is not installed. Please install IIS first."
@@ -501,9 +544,6 @@ function Deploy-IISSite {
     $SystemPython = Get-SystemPython
 
     if (-not $SystemPython) { Write-Error-Custom "No valid Python interpreter found. Install Python from python.org." exit 1 }
-
-    # Packages required
-    $packages = @("flask", "wfastcgi","click", "itsdangerous", "jinja2", "markupsafe", "werkzeug", "blinker")
 
     #ONLINE
     if ($testNet) {
@@ -808,6 +848,9 @@ function Undeploy-IISSite {
     $siteAppPool = $site.ApplicationPool
     $venvPath = Join-Path $sitePhysicalPath '.venv'
 
+    Write-Host "Site '$SiteName' found"
+    Write-Host "Using '$siteAppPool'"
+
     # Paths
     $pythonExe = Join-Path $venvPath 'Scripts\python.exe'
     $venvWFastCGIPath = Join-Path $venvPath 'Lib\site-packages\wfastcgi.py'
@@ -864,6 +907,11 @@ function Undeploy-IISSite {
 
     # Check if app pool is used by other sites
     if ($siteAppPool -and $siteAppPool -ne "DefaultAppPool") {
+
+        if ($KeepAppPool) {
+            $KeepAppPool = (Read-Host "Keep Application Pool '$siteAppPool'? (Y/N)") -match '^[Yy]'
+        }
+
         if ($KeepAppPool -eq $false) {
             Write-Host "`nChecking application pool usage..."
             $remainingSitesUsingPool = @(Get-Website | Where-Object {$_.ApplicationPool -eq $siteAppPool} | Select-Object -ExpandProperty Name)
