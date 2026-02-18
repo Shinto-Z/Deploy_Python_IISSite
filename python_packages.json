@@ -1,0 +1,18 @@
+{
+  "packages": [
+    "flask",
+    "wfastcgi",
+    "click",
+    "itsdangerous",
+    "jinja2",
+    "markupsafe",
+    "werkzeug",
+    "blinker",
+    "flask_session",
+    "ldap3",
+    "pyodbc",
+    "pyasn1",
+    "cachelib",
+    "msgspec"
+  ]
+}
